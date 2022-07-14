@@ -30,20 +30,27 @@ else:
 # helper class ---------- #
 class ImageAugs():
     def __init__(self, n_cutouts=10,
-                 aug_dicts=[{'type': 'ColorJitter'}, {'type': 'RandomAffine'},
+                 image_aug_dicts=[{'type': 'ColorJitter'}, {'type': 'RandomAffine'},
                             {'type': 'RandomResizedCrop'}, {'type': 'RandomErasing'}],
+                 keep_original=False,
                  **args):
         self.n_cutouts = n_cutouts
-        self.augs = self.instantiate_augs(aug_dicts)
+        self.augs = self.instantiate_augs(image_aug_dicts)
+        self.keep_original = keep_original
     def __call__(self, image_batch: torch.Tensor):
         assert image_batch.dim() == 4
         # FIXME: currently only size-one image batch with BCHW is acceptable
         assert image_batch.shape[0] == 1
         image_batch = image_batch.repeat(self.n_cutouts, 1, 1, 1)
-        image_batch = self.augs(image_batch)
+        if self.keep_original:
+            # print('original image is keeped')
+            image_batch = torch.cat((image_batch[0:1], self.augs(image_batch[1:])), dim=0)
+        else:
+            image_batch = self.augs(image_batch)
         return image_batch
     def instantiate_augs(self, aug_dicts):
         augs = []
+        print(aug_dicts)
         # TODO: implement other types of augmentations
         for aug_dict in aug_dicts:
             aug_type = aug_dict['type']
@@ -73,6 +80,7 @@ class ImageAugs():
                 augs.append(K.RandomErasing(**param_dict))
             # augmentations below is randomly applied by default even if specified by conf
             # the propabilities are based on those in VQGAN-CLIP
+            # you can change the probability by 'p'
             elif aug_type == 'RandomSharpness':
                 param_dict = {'sharpness': 0.3, 'p': 0.5}
                 param_dict.update(update_dict)
@@ -113,12 +121,13 @@ class ImageAugs():
                     update_dict['max_val'] = Tensor(update_dict['max_val'])
                 param_dict.update(update_dict)
                 augs.append(K.RandomInvert(**param_dict))
-            elif aug_type == 'RandomPosterize':
-                param_dict = {'bits': 3, 'same_on_batch': False,
-                              'p': 0.5, 'keepdim': False,
-                              'return_transform': None}
-                param_dict.update(update_dict)
-                augs.append(K.RandomPosterize(**param_dict))
+            # RandomPosterize is a non-differential processing
+            # elif aug_type == 'RandomPosterize':
+            #     param_dict = {'bits': 3, 'same_on_batch': False,
+            #                   'p': 0.5, 'keepdim': False,
+            #                   'return_transform': None}
+            #     param_dict.update(update_dict)
+            #     augs.append(K.RandomPosterize(**param_dict))
             elif aug_type == 'RandomSolarize':
                 param_dict = {'thresholds': 0.1, 'additions': 0.1,
                               'same_on_batch': False, 'p': 0.5, 'keepdim': False,
@@ -224,7 +233,8 @@ class ImageEncoderActivationLoss():
                  input_image_shape=(224, 224), layer_weights=None,
                  loss_dicts=[{'loss_name': 'MSE', 'weight': 1}],
                  masks=None, channels=None,
-                 given_in_range_255=True, image_augmentation=False, image_aug=None, **args):
+                 given_in_range_255=True, image_augmentation=False, image_aug=None,
+                 layers_to_apply_DA=None, **args):
         self.model = model
         self.model.eval()
         self.given_as_BGR = given_as_BGR
@@ -257,6 +267,7 @@ class ImageEncoderActivationLoss():
         if image_augmentation:
             assert image_aug is not None
             self.image_aug = image_aug
+        self.layers_to_apply_DA = layers_to_apply_DA
 
     def __del__(self):
         del self.feature_extractor
@@ -267,13 +278,21 @@ class ImageEncoderActivationLoss():
             if loss_dict['loss_name'] == 'MSE':
                 # loss_dict['loss_func'] = torch.nn.MSELoss(reduction='sum')
                 if 'params' not in loss_dict: loss_dict['params'] = {}
+                if 'reduction' in loss_dict['params']:
+                    loss_dict['average_across_batch'] = loss_dict['params']['reduction'] == 'sum'
+                else:
+                    loss_dict['average_across_batch'] = False
                 loss_dict['loss_func'] = torch.nn.MSELoss(**loss_dict['params'])
+            # TODO: check whether 'average_across_batch' is correct or not
             elif loss_dict['loss_name'] == 'CorrLoss':
+                loss_dict['average_across_batch'] = False
                 loss_dict['loss_func'] = CorrLoss()
             elif loss_dict['loss_func'] == 'MSEwithRegularization':
                 # vid is the required parameter
+                loss_dict['average_across_batch'] = False
                 loss_dict['loss_func'] = MSEwithRegularization(**loss_dict['params'])
             elif loss_dict['loss_func'] == 'FeatCorrLoss':
+                loss_dict['average_across_batch'] = False
                 loss_dict['loss_func'] = FeatCorrLoss()
             else:
                 warnings.warn('invalid loss type {} was ignored'.format(loss_dict['loss_name']))
@@ -290,36 +309,37 @@ class ImageEncoderActivationLoss():
             image_batch = image_batch[:, permute, :, :]
         # FIXME: kornia expects image with pixel values in a range [0, 1], so normalization is needed
         if self.image_augmentation:
-            print('start augmentation process')
+            # print('start augmentation process')
             if self.given_in_range_255:
-                print('0~255 -> 0~1')
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('0~255 -> 0~1')
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
                 image_batch = self.image_aug(image_batch / 255) * 255
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
             else: # pixel value range = [0, 1]
-                print('0~1 -> 0~1')
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('0~1 -> 0~1')
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
                 image_batch = self.image_aug(image_batch)
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
-            print('done')
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+            # print('done')
         if self.preprocess is not None:
-            print('start preprocessing')
+            # print('start preprocessing')
             if not self.preprocess_input_range_255 and self.given_in_range_255:
-                print('0~255 -> 0~1')
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('0~255 -> 0~1')
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
                 image_batch = image_batch / 255
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
             elif self.preprocess_input_range_255 and not self.given_in_range_255:
-                print('0~1 -> 0~255')
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('0~1 -> 0~255')
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
                 image_batch = image_batch * 255
-                print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
-            print('before preprocess: min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+                # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+            # print('before preprocess: min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
             image_batch = self.preprocess(image_batch)
-            print('before preprocess: min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
-            print('done')
+            # print('before preprocess: min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+            # print('done')
         else:
-            print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+            # print('min={}, mean={}, max={}'.format(image_batch.min().item(), image_batch.mean().item(), image_batch.max().item()))
+            pass
         # TODO: accept activations given in function arguments so that no redundant computation occurs
         current_features = self.feature_extractor(image_batch)
         return self.calc_losses(current_features)
@@ -336,7 +356,12 @@ class ImageEncoderActivationLoss():
             # TODO: show logs
             tmp_loss = 0
             for j, lay in enumerate(reversed_layer_list):
-                act_j = current_features[lay].clone().to(self.device)
+                if self.layers_to_apply_DA is not None and lay not in self.layers_to_apply_DA:
+                    act_j = current_features[lay].clone().to(self.device)[0:1]
+                    # original_shape = current_features[lay].shape
+                    # print('layer {} is not targets for DA. shape is changed from {} to {}'.format(lay, original_shape, act_j.shape))
+                else:
+                    act_j = current_features[lay].clone().to(self.device)
                 act_j_shape = [shape_i if i == 0 else 1 for (i, shape_i) in enumerate(act_j.shape)]
                 feat_j = torch.tensor(self.ref_features[lay], device=self.device).clone().repeat(act_j_shape) # for image augmentation case
                 mask_j = torch.FloatTensor(self.feature_masks[lay]).to(self.device)
@@ -344,6 +369,8 @@ class ImageEncoderActivationLoss():
                 masked_feat_j = torch.masked_select(feat_j, mask_j.bool()).view(feat_j.shape)
                 masked_act_j = torch.masked_select(act_j, mask_j.bool()).view(act_j.shape)
                 loss_j = loss_dict['loss_func'](masked_act_j, masked_feat_j) * weight_j
+                if loss_dict['average_across_batch']:
+                    loss_j = loss_j / len(act_j)
                 tmp_loss += loss_j
 
             if self.include_model_output:
@@ -405,4 +432,30 @@ class CLIPLoss():
         assert loss.shape == torch.Size([1])
         torch.cuda.empty_cache()
         return loss[0]
+### ---------------------------------------------------- ###
+
+### Loss based on pixel value range --------------- ###
+# main loss class used for reconstruction ----------#
+class PixelRangeLoss():
+    '''
+    if `given_in_range_255`, pixel values are expected to in [0, 255]
+    otherwise, pixel values are expected to in [0, 1]
+    '''
+    def __init__(self, minimum_value=0, maximum_value=255, **args):
+        self.minimum_value = minimum_value
+        self.maximum_value = maximum_value
+
+    def __call__(self, image_batch: torch.Tensor):
+        '''
+        image_batch is expected `not` to be preprocessed/normalized
+        '''
+        # TODO: check implementation in existing works
+        loss = 0
+        if self.minimum_value is not None:
+            deficiency = self.minimum_value - image_batch
+            loss += (deficiency * (image_batch < self.minimum_value)).sum()
+        if self.maximum_value is not None:
+            excess = image_batch - self.maximum_value
+            loss += (excess * (image_batch > self.maximum_value)).sum()
+        return loss
 ### ---------------------------------------------------- ###

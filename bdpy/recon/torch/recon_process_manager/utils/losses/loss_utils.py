@@ -128,10 +128,14 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
         perform_image_augmentation = image_augmentation_info['perform_augmentation']
         image_augs = None
         if perform_image_augmentation:
-            image_augs = ImageAugs(**image_augmentation_info)
+            print(image_augmentation_info)
+            image_augs = ImageAugs(keep_original=is_in_and_not_None('layers_to_apply_DA', image_augmentation_info),
+                                   **image_augmentation_info)
+            layers_to_apply_DA = image_augmentation_info['layers_to_apply_DA'] if 'layers_to_apply_DA' in image_augmentation_info else None
     else:
         image_augs = None
         perform_image_augmentation = False
+        layers_to_apply_DA = None
 
     loss_instance = ImageEncoderActivationLoss(model, device, ref_features,
                                                preprocess=preprocess,
@@ -145,7 +149,8 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
                                                sample_axis_info=sample_axis_info,
                                                include_model_output=include_model_output,
                                                image_augmentation=perform_image_augmentation,
-                                               image_aug=image_augs)
+                                               image_aug=image_augs,
+                                               layers_to_apply_DA=layers_to_apply_DA)
     return loss_instance
 
 

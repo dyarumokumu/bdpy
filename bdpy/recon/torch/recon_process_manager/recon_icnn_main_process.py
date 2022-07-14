@@ -134,13 +134,14 @@ class ReconProcess:
         if self.use_generator:
             image_tensor = self.generate_image()
             if self.image_deprocess is not None:
-                print('start deprocessing')
-                print('before deprocess: min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
+                # print('start deprocessing')
+                # print('before deprocess: min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
                 image_tensor = self.image_deprocess(image_tensor)
-                print('after deprocess: min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
-                print('done')
+                # print('after deprocess: min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
+                # print('done')
             else:
-                print('min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
+                # print('min={}, mean={}, max={}'.format(image_tensor.min().item(), image_tensor.mean().item(), image_tensor.max().item()))
+                pass
             self.image_tensor = image_tensor
         else:
             self.image_tensor.data = torch.tensor(self.image_array.transpose(2,0,1)[None], device=self.device)

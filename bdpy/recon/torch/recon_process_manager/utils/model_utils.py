@@ -16,7 +16,10 @@ def create_model_instance(model_name, device='cpu', training=False, **args):
         # TODO: specification by file
         mean = args['preprocess_info']['mean']
         std = args['preprocess_info']['std']
-        preprocess_from_conf = get_image_preprocess_in_tensor_function(mean, std)
+        if mean is not None and std is not None:
+            preprocess_from_conf = get_image_preprocess_in_tensor_function(mean, std)
+        else:
+            preprocess_from_conf = None
     else:
         preprocess_from_conf = None
 
