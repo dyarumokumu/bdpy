@@ -223,6 +223,19 @@ class FeatCorrLoss():
 
         return self.loss_fun(x_mat, y_mat)
 
+class CosSimilarityLoss():
+    """
+    Cosine similarity loss
+    """
+    def __init__(self, margin=0., reduction='mean', target=1):
+        self.target = target > 0
+        self.loss_func = nn.CosineEmbeddingLoss(margin=margin, reduction=reduction)
+
+    def __call__(self, act, feat):
+        target_shape = () if act.ndim == 0 else len(act)
+        target = self.target * torch.ones(target_shape)
+        return self.loss_func(act, feat, target=target)
+
 # main loss class used for reconstruction ----------#
 class ImageEncoderActivationLoss():
     def __init__(self, model, device, ref_features,
@@ -234,7 +247,7 @@ class ImageEncoderActivationLoss():
                  loss_dicts=[{'loss_name': 'MSE', 'weight': 1}],
                  masks=None, channels=None,
                  given_in_range_255=True, image_augmentation=False, image_aug=None,
-                 layers_to_apply_DA=None, **args):
+                 layers_to_apply_DA=None, image_cropping=None, **args):
         self.model = model
         self.model.eval()
         self.given_as_BGR = given_as_BGR
@@ -268,6 +281,7 @@ class ImageEncoderActivationLoss():
             assert image_aug is not None
             self.image_aug = image_aug
         self.layers_to_apply_DA = layers_to_apply_DA
+        self.image_cropping = image_cropping
 
     def __del__(self):
         del self.feature_extractor
@@ -294,6 +308,13 @@ class ImageEncoderActivationLoss():
             elif loss_dict['loss_func'] == 'FeatCorrLoss':
                 loss_dict['average_across_batch'] = False
                 loss_dict['loss_func'] = FeatCorrLoss()
+            elif loss_dict['loss_func'] == 'CosSimilarityLoss':
+                if 'params' not in loss_dict: loss_dict['params'] = {}
+                if 'reduction' in loss_dict['params']:
+                    loss_dict['average_across_batch'] = loss_dict['params']['reduction'] == 'sum'
+                else:
+                    loss_dict['average_across_batch'] = False
+                loss_dict['loss_func'] = CosSimilarityLoss(**loss_dict['params'])
             else:
                 warnings.warn('invalid loss type {} was ignored'.format(loss_dict['loss_name']))
             tmp_dicts.append(loss_dict)
@@ -303,6 +324,10 @@ class ImageEncoderActivationLoss():
         '''
         image_batch needs to be deprocessed beforehand (i.e., given in range [0, 255] or [0, 1])
         '''
+        if self.image_cropping is not None:
+            image_cropping = self.image_cropping
+            # print('cropping: {} ({})'.format(image_cropping, image_batch.shape))
+            image_batch = image_batch[:, :, image_cropping[0]:image_cropping[1], image_cropping[2]:image_cropping[3]]
         image_batch = F.interpolate(image_batch, tuple(list(self.input_image_shape)[:2]))
         if self.model_inputs_are_RGB and self.given_as_BGR:
             permute = [2, 1, 0]
@@ -349,8 +374,8 @@ class ImageEncoderActivationLoss():
             eval('self.model.{}.zero_grad()'.format(list(self.layer_mapping.values())[-1]))
         else:
             eval('self.model.{}.zero_grad()'.format(list(self.layer_mapping.values())[-2]))
-        layers = self.ref_features.keys()
-        reversed_layer_list = reversed(layers) if not self.include_model_output else list(reversed(layers))[1:]
+        layers = list(self.ref_features.keys())
+        reversed_layer_list = list(reversed(layers)) if not self.include_model_output else list(reversed(layers))[1:]
         loss = 0
         for loss_dict in self.loss_dicts:
             # TODO: show logs
@@ -390,7 +415,8 @@ class CLIPLoss():
     otherwise, pixel values are expected to in [0, 1]
     '''
     def __init__(self, clip_model, ref_features, device, given_as_BGR=False,
-                 given_in_range_255=True, image_augmentation=False, image_aug=None, **args):
+                 given_in_range_255=True, image_augmentation=False, image_aug=None,
+                 image_cropping=None, **args):
         self.clip_model = clip_model.to(device)
         self.clip_model.eval()
         self.ref_features = torch.tensor(ref_features).to(device).float() # (1, 512)-shaped feature. maybe (n, 512) is also acceptable. Also, image feature can be used
@@ -403,12 +429,16 @@ class CLIPLoss():
             assert image_aug is not None
             self.image_aug = image_aug
         self.given_in_range_255 = given_in_range_255
+        self.image_cropping = image_cropping
 
     def __call__(self, image_batch: torch.Tensor):
         '''
         image_batch is expected `not` to be preprocessed/normalized
         '''
         image_encoder = self.clip_model.visual.float()
+        if self.image_cropping is not None:
+            image_cropping = self.image_cropping
+            image_batch = image_batch[:, :, image_cropping[0]:image_cropping[1], image_cropping[2]:image_cropping[3]]
         if self.given_as_BGR:
             permute = [2, 1, 0]
             image_batch = image_batch[:, permute, :, :]

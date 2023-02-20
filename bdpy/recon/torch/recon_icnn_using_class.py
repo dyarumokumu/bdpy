@@ -80,6 +80,8 @@ def get_required_models(recon_conf):
     loss_dicts = recon_conf['loss_settings']
     for loss_dict in loss_dicts:
         # FIXME: losses that do not require any model are not considered
+        if not 'encoder_info' in loss_dict:
+            continue
         encoder_info = loss_dict['encoder_info']
         network_name = encoder_info['network_name']
         if network_name not in required_models:

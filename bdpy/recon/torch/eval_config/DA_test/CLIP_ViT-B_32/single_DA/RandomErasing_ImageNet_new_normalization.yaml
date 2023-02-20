@@ -1,0 +1,124 @@
+analysis name: ImageNet_fmriprep_500voxel_allunits_fastl2lir_alpha100
+
+feature decoding: /home/eitoikuta/bdpy_update/bdpy/bdpy/recon/torch/eval_config/null.yaml
+
+# fMRI data ##################################################################
+
+training fmri:
+  TH:
+    - /home/kiss/data/fmri_shared/datasets/Deeprecon/fmriprep/TH_ImageNetTraining_volume_native.h5
+
+test fmri:
+  TH:
+    - /home/kiss/data/fmri_shared/datasets/Deeprecon/fmriprep/TH_ImageNetTest_volume_native.h5
+
+rois:
+  VC: ROI_VC = 1
+
+# The number of voxels used in feature decoding
+rois voxel num:
+  VC: 500
+
+label key:
+  stimulus_name
+
+# DNN features ###############################################################
+training feature dir:
+  - /home/eitoikuta/reconstruction_revised/extracted_features
+
+test feature dir:
+  - /home/eitoikuta/reconstruction_revised/extracted_features
+
+network:
+  CLIP_ViT-B_32/ImageNetTest
+
+layers:
+  - conv1
+  - transformer_resblocks0_attn_output
+  - transformer_resblocks0_mlp
+  - transformer_resblocks1_attn_output
+  - transformer_resblocks1_mlp
+  - transformer_resblocks2_attn_output
+  - transformer_resblocks2_mlp
+  - transformer_resblocks3_attn_output
+  - transformer_resblocks3_mlp
+  - transformer_resblocks4_attn_output
+  - transformer_resblocks4_mlp
+  - transformer_resblocks5_attn_output
+  - transformer_resblocks5_mlp
+  - transformer_resblocks6_attn_output
+  - transformer_resblocks6_mlp
+  - transformer_resblocks7_attn_output
+  - transformer_resblocks7_mlp
+  - transformer_resblocks8_attn_output
+  - transformer_resblocks8_mlp
+  - transformer_resblocks9_attn_output
+  - transformer_resblocks9_mlp
+  - transformer_resblocks10_attn_output
+  - transformer_resblocks10_mlp
+  - transformer_resblocks11_attn_output
+  - transformer_resblocks11_mlp
+  - ln_post
+  - model_output
+
+# Feature decoding ###########################################################
+decoding network name: CLIP_ViT-B_32/ImageNetTraining
+
+feature decoder dir:
+  /home/eitoikuta/reconstruction_revised/CLIP/pipeline_results/feature_decoders
+
+# Decoded features
+decoded feature dir:
+  /home/eitoikuta/reconstruction_revised/CLIP/pipeline_results/decoded_features
+# /home/eitoikuta/reconstruction_revised/CLIP/pipeline_results/decoded_features/ImageNet_fmriprep_500voxel_allunits_fastl2lir_alpha100/decoded_features/CLIP_ViT-B_32/ImageNetTraining/conv1
+# Learning parameters
+alpha: 100
+chunk axis: 1
+
+# Figure output
+decoding figure dir:
+  /home/eitoikuta/reconstruction_revised/CLIP/pipeline_results/decoding_result_figures
+
+score_saving_filename: 'accuracy.pkl.gz'
+
+# Evaluation metric settings #################################################
+profile correlation: True
+pattern correlation: True
+identification accuracy: True
+identification accuract normalized: False
+MSE: False
+MSE-based identification accuracy: False
+MSE-based identification accuracy (vs. other preds): False
+feature profile correlation: True
+feature pattern correlation: True
+feature identification accuracy: True
+pixel correlation: True
+pixel-based identification accuracy: True
+
+# Plot type settings #########################################################
+plot types:
+  profile correlation: 'violin'
+  pattern correlation: 'swarm+box'
+  identification accuracy: 'swarm+box'
+  identification accuract normalized: 'swarm+box'
+  MSE: 'violin'
+  MSE-based identification accuracy: 'swarm+box'
+  MSE-based identification accuracy (vs. other preds): 'swarm+box'
+  feature profile correlation: 'violin'
+  feature pattern correlation: 'swarm+box'
+  feature identification accuracy: 'swarm+box'
+  pixel correlation: 'violin'
+  pixel-based identificaion: 'swarm+box'
+
+recon output dir: /home/eitoikuta/_import_test/image_recon_test_results/DA_test/CLIP_ViT-B_32/single_DA/RandomErasing_600iter_ImageNet_new_normalization
+true image dir: "/home/eitoikuta/reconstruction_revised/True images"
+quality output filename: quality.pkl.gz
+quality-dnn output filename: quality-dnn.pkl.gz
+recon subjects:
+  - TH
+recon rois:
+  - VC
+recon image ext: tiff
+true image ext: JPEG
+recon eval encoder: 'AlexNet'
+image_id_pattern: "n[0-9]{8}_[0-9]{2,5}"

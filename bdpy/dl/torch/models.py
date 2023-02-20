@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
+from types import MethodType
 
-__all__ = ['layer_map', 'VGG19', 'AlexNet', 'AlexNetGenerator']
+__all__ = ['layer_map', 'VGG19', 'AlexNet', 'AlexNetGenerator', 'StyleGAN3Generator']
 
 def layer_map(net):
     maps = {
@@ -82,6 +83,35 @@ def layer_map(net):
             'transformer_resblocks11_mlp': 'transformer.resblocks[11].mlp',
             'ln_post': 'ln_post',
             'model_output': 'model_output'
+        },
+
+        'ArcFace': {
+            'input_layer': 'input_layer',
+            'bottleneck_IR_SE0': 'body[0]',
+            'bottleneck_IR_SE1': 'body[1]',
+            'bottleneck_IR_SE2': 'body[2]',
+            'bottleneck_IR_SE3': 'body[3]',
+            'bottleneck_IR_SE4': 'body[4]',
+            'bottleneck_IR_SE5': 'body[5]',
+            'bottleneck_IR_SE6': 'body[6]',
+            'bottleneck_IR_SE7': 'body[7]',
+            'bottleneck_IR_SE8': 'body[8]',
+            'bottleneck_IR_SE9': 'body[9]',
+            'bottleneck_IR_SE10': 'body[10]',
+            'bottleneck_IR_SE11': 'body[11]',
+            'bottleneck_IR_SE12': 'body[12]',
+            'bottleneck_IR_SE13': 'body[13]',
+            'bottleneck_IR_SE14': 'body[14]',
+            'bottleneck_IR_SE15': 'body[15]',
+            'bottleneck_IR_SE16': 'body[16]',
+            'bottleneck_IR_SE17': 'body[17]',
+            'bottleneck_IR_SE18': 'body[18]',
+            'bottleneck_IR_SE19': 'body[19]',
+            'bottleneck_IR_SE20': 'body[20]',
+            'bottleneck_IR_SE21': 'body[21]',
+            'bottleneck_IR_SE22': 'body[22]',
+            'bottleneck_IR_SE23': 'body[23]',
+            'output_layer': 'output_layer'
         }
     }
     return maps[net]
@@ -178,7 +208,7 @@ class AlexNet(nn.Module):
             nn.ReLU(inplace=False),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=False),
-            nn.Linear(4096, num_classes), 
+            nn.Linear(4096, num_classes),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -275,3 +305,36 @@ class AlexNetGenerator(nn.Module):
         g = self.deconv(f)
 
         return g
+
+class StyleGAN3Generator(nn.Module):
+    def __init__(self, generator, input_space='z', **args):
+        super(StyleGAN3Generator, self).__init__()
+        self.generator = generator
+        self.input_space = input_space
+        if self.input_space == 'w':
+            self.add_w_to_image_method()
+    def forward(self, input_vectors):
+        if self.input_space == 'z': # (B, 512) -> (B, 3, 1024, 1024)
+            return self.generator(input_vectors, None, truncation_psi=1, truncation_cutoff=None, update_emas=False)
+        elif self.input_space == 'w': # (B, 512) -> (B, 3, 1024, 1024)
+            return self.generator.w_to_image(input_vectors)
+        else:
+            assert self.input_space == 'w+' # (B, 16, 512) -> (B, 3, 1024, 1024)
+            return self.generator.synthesis(input_vectors, update_emas=False)
+    def add_w_to_image_method(self):
+        def w_to_ws(self, w, truncation_psi=1, truncation_cutoff=None):
+            # Broadcast and apply truncation.
+            x = w.unsqueeze(1).repeat([1, self.num_ws, 1])
+            if truncation_psi != 1:
+                x[:, :truncation_cutoff] = self.w_avg.lerp(x[:, :truncation_cutoff], truncation_psi)
+            return x
+        def w_to_image(self, w):
+            ws = self.mapping.w_to_ws(w)
+            return self.synthesis(ws)
+        self.generator.mapping.w_to_ws = MethodType(w_to_ws, self.generator.mapping)
+        self.generator.w_to_image = MethodType(w_to_image, self.generator)
+    def get_average_feature(self):
+        if self.input_space == 'w':
+            return self.generator.mapping.w_avg.detach().cpu().numpy()
+        else:
+            raise ValueError('initial feature is not provided for the space {}'.format(self.input_space))

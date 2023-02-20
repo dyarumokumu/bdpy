@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 
-from .losses import ImageEncoderActivationLoss, CLIPLoss, ImageAugs
+from .losses import ImageEncoderActivationLoss, CLIPLoss, ImageAugs, PixelRangeLoss
 from .feature_scaling_utils import normalize_features
 
 __all__ = ['loss_dicts_to_loss_instances']
@@ -107,7 +107,7 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
         layer_weights = None
     else:
         layer_weights = calc_layer_weight_from_norm(ref_features, module_loading_names)
-        print(layer_weights)
+        print('layer weights:', layer_weights)
 
     # load model
     encoder_info = loss_dict['encoder_info']
@@ -127,6 +127,7 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
         image_augmentation_info = loss_dict['image_augmentation']
         perform_image_augmentation = image_augmentation_info['perform_augmentation']
         image_augs = None
+        layers_to_apply_DA = None
         if perform_image_augmentation:
             print(image_augmentation_info)
             image_augs = ImageAugs(keep_original=is_in_and_not_None('layers_to_apply_DA', image_augmentation_info),
@@ -136,6 +137,12 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
         image_augs = None
         perform_image_augmentation = False
         layers_to_apply_DA = None
+
+    image_cropping = None
+    if 'image_cropping' in loss_dict:
+        image_cropping = loss_dict['image_cropping']
+        if image_cropping is not None:
+            assert len(image_cropping) == 4
 
     loss_instance = ImageEncoderActivationLoss(model, device, ref_features,
                                                preprocess=preprocess,
@@ -150,7 +157,8 @@ def create_ImageEncoderActivationLoss_instance(loss_dict, model_info, features,
                                                include_model_output=include_model_output,
                                                image_augmentation=perform_image_augmentation,
                                                image_aug=image_augs,
-                                               layers_to_apply_DA=layers_to_apply_DA)
+                                               layers_to_apply_DA=layers_to_apply_DA,
+                                               image_cropping=image_cropping)
     return loss_instance
 
 
@@ -267,19 +275,34 @@ def create_CLIPLoss_instance(loss_dict, model_info, features,
         text_feature_ROI_selection = yaml.safe_load(file)
 
     if ref_feature_info['decoded']:
-        ref_features = {layer: features.get(layer=layer, subject=subject, roi=text_feature_ROI_selection[layer][roi], image=image_label)
-                        for layer in module_loading_names if not text_feature_ROI_selection[layer][roi] is None}
-        ref_features['output_layer'] = features.get(layer='output_layer', subject=subject, roi='whole_VC', image=image_label)
+        ref_features = {layer: features.get(layer=layer, subject=subject, roi=text_feature_ROI_selection[layer]['roi'], image=image_label)
+                        for layer in module_loading_names if not text_feature_ROI_selection[layer]['roi'] is None}
+        # ref_features['output_layer'] = features.get(layer='output_layer', subject=subject, roi='whole_VC', image=image_label)
+        print(roi)
+        ref_features['output_layer'] = features.get(layer='output_layer', subject=subject, roi=roi, image=image_label)
         print('ref_features["output_layer"]', ref_features['output_layer'].shape)
     else:
         # FIXME: dirty solution for mismatching image labels in true features
-        if int(image_label) > 2185:
-            tmp_image_label = str(int(image_label) - 2185)
-        else:
+        try:
+            if int(image_label) > 2185:
+                tmp_image_label = str(int(image_label) - 2185)
+            else:
+                tmp_image_label = image_label
+        except:
             tmp_image_label = image_label
         ref_features = {layer: features.get(layer='', image=tmp_image_label)
                         for layer in module_loading_names if not text_feature_ROI_selection[layer]['roi'] is None}
         ref_features['output_layer'] = features.get(layer='', image=tmp_image_label)
+
+    # normalize features
+    if is_in_and_True('normalize_feature', ref_feature_info):
+        assert 'normalization_settings' in ref_feature_info
+        normalization_settings = ref_feature_info['normalization_settings']
+        for factor_settings in normalization_settings.values():
+            if factor_settings['values'] not in ['mean', 'std'] and not isinstance(factor_settings['values'], dict):
+                factor_settings['values'] = loadmat(factor_settings['values'])
+        ref_features = normalize_features(ref_features, normalization_settings)
+
     mean_accuracy_dict = {layer: text_feature_ROI_selection[layer]['accuracy']
                           for layer in module_loading_names if not text_feature_ROI_selection[layer]['roi'] is None}
     # FIXME: use actutal mean accuracy
@@ -306,14 +329,24 @@ def create_CLIPLoss_instance(loss_dict, model_info, features,
     image_augs = None
     if perform_image_augmentation:
         image_augs = ImageAugs(**image_augmentation_info)
+
+    image_cropping = None
+    if 'image_cropping' in loss_dict:
+        image_cropping = loss_dict['image_cropping']
+        if image_cropping is not None:
+            assert len(image_cropping) == 4
     loss_instance = CLIPLoss(clip_model, ref_features, device,
                              given_as_BGR=generator_BGR,
                              given_in_range_255=given_in_range_255,
                              preprocess_input_range_255=preprocess_input_range_255,
                              image_augmentation=perform_image_augmentation,
-                             image_aug=image_augs)
+                             image_aug=image_augs,
+                             image_cropping=image_cropping)
     return loss_instance
 
+def create_PixelRangeLoss_instance(loss_dict):
+    loss_instance = PixelRangeLoss(**loss_dict)
+    return loss_instance
 
 ### Helper function for creating one loss instance from one loss_dict  ---------- ###
 def loss_dict_to_loss_instance(loss_dict, device='cpu', **args):
@@ -323,6 +356,8 @@ def loss_dict_to_loss_instance(loss_dict, device='cpu', **args):
         loss_instance = create_ImageEncoderActivationLoss_instance(loss_dict, **args, device=device)
     elif loss_type == 'CLIPLoss':
         loss_instance = create_CLIPLoss_instance(loss_dict, **args, device=device)
+    elif loss_type == 'PixelRangeLoss':
+        loss_instance = create_PixelRangeLoss_instance(loss_dict)
     else:
         assert False, print('Unknown loss type is specified: {}'.format(loss_type))
     return loss_instance
@@ -372,14 +407,13 @@ def loss_dicts_to_loss_instances(loss_dicts, models_dict, features_dicts,
                 # get features corresponding to image_label
             assert features is not None
             options['features'] = features
-
             options['model_info'] = models_dict[loss_dict['encoder_info']['network_name']]
-            loss_instance = loss_dict_to_loss_instance(loss_dict, **options, generator_BGR=generator_BGR, given_in_range_255=given_in_range_255, device=device)
-            loss_func_dict['loss_type'] = loss_dict['loss_type']
-            loss_func_dict['loss_func'] = loss_instance
-            loss_func_dict['weight'] = loss_dict['weight']
-            loss_func_dicts.append(loss_func_dict)
-        else:
+        elif not loss_dict['loss_type'] == 'PixelRangeLoss':
             warnings.warn('loss {} is ignored'.format(loss_dict['loss_type']))
+        loss_instance = loss_dict_to_loss_instance(loss_dict, **options, generator_BGR=generator_BGR, given_in_range_255=given_in_range_255, device=device)
+        loss_func_dict['loss_type'] = loss_dict['loss_type']
+        loss_func_dict['loss_func'] = loss_instance
+        loss_func_dict['weight'] = loss_dict['weight']
+        loss_func_dicts.append(loss_func_dict)
 
     return loss_func_dicts

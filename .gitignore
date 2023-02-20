@@ -23,3 +23,14 @@ junk
 tmp
 test_local
 test_versions
+
+bdpy/fig/tile_image_and_movie_configs/Face
+bdpy/fig/tile_image_and_movie_configs/CLIP_*
+bdpy/fig/tile_image_and_movie_configs/VGG19_*
+
+bdpy/recon/torch/eval_config/*.yaml
+bdpy/recon/torch/eval_config/DA_test/VGG19
+
+bdpy/recon/torch/recon_config/DA_test
+bdpy/recon/torch/recon_config/*.yaml
+bdpy/recon/torch/recon_config/loss_history_test

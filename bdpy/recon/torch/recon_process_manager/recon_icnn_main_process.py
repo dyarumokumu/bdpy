@@ -49,6 +49,9 @@ class ReconProcess:
                  feature_saving_pattern_tail='_feature',
                  image_label='',
                  image_array_is_BGR=False,
+                 save_individual_loss_histories=False,
+                 image_cropping=None,
+                 save_raw_image_array=True,
                  **args):
         '''
         initialization
@@ -77,7 +80,7 @@ class ReconProcess:
             self.image_array = self.initialize_image_array(initial_image, image_shape, image_mean)
             self.image_tensor = torch.tensor(self.image_array.transpose(2,0,1)[None], device=self.device, requires_grad=True)
             self.optimizer = optim_name2class(optimizer_info['optimizer_name'])([self.image_tensor], lr=2.0) # lr will be configurated in each step
-        self.loss_history = np.zeros(n_iter, dtype=np.float32)
+        self.loss_history = {'all': []}
         self.optimizer_param_dicts = optimizer_info['param_dicts']
         self.normalize_gradients = normalize_gradients
         self.inter_step_process_dicts = inter_step_processes
@@ -90,6 +93,13 @@ class ReconProcess:
         self.save_feature = save_generator_feature
 
         self.save_loss_hist = save_loss_hist
+        self.save_individual_loss_histories = save_individual_loss_histories
+        if self.save_loss_hist and self.save_individual_loss_histories:
+            # TODO: deal with multiple loss instances belonging to one loss clacc
+            for loss_func_dict in self.loss_func_dicts:
+                loss_type_name = loss_func_dict['loss_type']
+                self.loss_history['weighted_' + loss_type_name] = []
+                self.loss_history['raw_' + loss_type_name] = []
         self.snapshot_postprocess = snapshot_postprocess
         self.image_postprocess = image_postprocess
         self.snapshot_ext = snapshot_ext
@@ -103,6 +113,8 @@ class ReconProcess:
         self.feature_saving_pattern_tail = feature_saving_pattern_tail
         self.image_label = image_label
         self.image_array_is_BGR = image_array_is_BGR
+        self.image_cropping = image_cropping # image cropping for saving images
+        self.save_raw_image_array = save_raw_image_array
 
     def initialize_image_array(self, initial_image, image_shape, image_mean, value_range=(0, 256)):
         if initial_image is None:
@@ -198,34 +210,37 @@ class ReconProcess:
                 self.image_tensor.grad /= grad_mean
 
     def inter_step_process(self):
-        for inter_step_process_dict in self.inter_step_process_dicts:
-            process_name = inter_step_process_dict['process_name']
-            if process_name == 'L2_decay':
-                decay_values = inter_step_process_dict['param_values']
-                decay_it = float(decay_values[0]) + (self.current_iteration - 1) * (float(decay_values[1]) - float(decay_values[0])) / self.n_iter
-                if not self.use_generator:
-                    self.image_array = (1 - decay_it) * self.image_array
+        if self.inter_step_process_dicts is None:
+            pass
+        else:
+            for inter_step_process_dict in self.inter_step_process_dicts:
+                process_name = inter_step_process_dict['process_name']
+                if process_name == 'L2_decay':
+                    decay_values = inter_step_process_dict['param_values']
+                    decay_it = float(decay_values[0]) + (self.current_iteration - 1) * (float(decay_values[1]) - float(decay_values[0])) / self.n_iter
+                    if not self.use_generator:
+                        self.image_array = (1 - decay_it) * self.image_array
+                    else:
+                        self.feature_array = (1 - decay_it) * self.feature_array
+                elif process_name == 'image_blurring' and not self.use_generator:
+                    sigma_values = inter_step_process_dict['param_values']
+                    sigma_it = float(sigma_values[0]) + (self.current_iteration - 1) * (float(sigma_values[1]) - float(sigma_values[0])) / self.n_iter
+                    self.image_array = gaussian_blur(self.image_array, sigma_it)
+                elif process_name == 'feature_clipping' and self.use_generator:
+                    feature_lower_bound, feature_upper_bound = inter_step_process_dict['param_values']
+                    if feature_lower_bound is not None:
+                        if not isinstance(feature_lower_bound, np.ndarray):
+                            feature_lower_bound = np.loadtxt(feature_lower_bound)
+                            inter_step_process_dict['param_values'][0] = feature_lower_bound
+                        self.feature_array = np.maximum(self.feature_array, feature_lower_bound)
+                    if feature_upper_bound is not None:
+                        if not isinstance(feature_upper_bound, np.ndarray):
+                            feature_upper_bound = np.loadtxt(feature_upper_bound)
+                            inter_step_process_dict['param_values'][1] = feature_upper_bound
+                        self.feature_array = np.minimum(self.feature_array, feature_upper_bound)
+                    self.feature_array.astype(np.float32)
                 else:
-                    self.feature_array = (1 - decay_it) * self.feature_array
-            elif process_name == 'image_blurring' and not self.use_generator:
-                sigma_values = inter_step_process_dict['param_values']
-                sigma_it = float(sigma_values[0]) + (self.current_iteration - 1) * (float(sigma_values[1]) - float(sigma_values[0])) / self.n_iter
-                self.image_array = gaussian_blur(self.image_array, sigma_it)
-            elif process_name == 'feature_clipping' and self.use_generator:
-                feature_lower_bound, feature_upper_bound = inter_step_process_dict['param_values']
-                if feature_lower_bound is not None:
-                    if not isinstance(feature_lower_bound, np.ndarray):
-                        feature_lower_bound = np.loadtxt(feature_lower_bound)
-                        inter_step_process_dict['param_values'][0] = feature_lower_bound
-                    self.feature_array = np.maximum(self.feature_array, feature_lower_bound)
-                if feature_upper_bound is not None:
-                    if not isinstance(feature_upper_bound, np.ndarray):
-                        feature_upper_bound = np.loadtxt(feature_upper_bound)
-                        inter_step_process_dict['param_values'][1] = feature_upper_bound
-                    self.feature_array = np.minimum(self.feature_array, feature_upper_bound)
-                self.feature_array.astype(np.float32)
-            else:
-                warnings.warn('Unknown inter-step process: {}'.format(process_name))
+                    warnings.warn('Unknown inter-step process: {}'.format(process_name))
 
     def stabilizing_process(self, backward=False):
         '''
@@ -269,12 +284,18 @@ class ReconProcess:
         print_with_verbose('iteration {}'.format(self.current_iteration), verbose=print_logs)
         for loss_func_dict in self.loss_func_dicts:
             c_loss = loss_func_dict['loss_func'](image_batch)
+            weighted_c_loss = c_loss * loss_func_dict['weight']
             # TODO: format the log
-            print_with_verbose('{}: {}'.format(loss_func_dict['loss_type'], c_loss.item()), verbose=print_logs)
-            loss += c_loss * loss_func_dict['weight']
+            print_with_verbose('{}: {}'.format(loss_func_dict['loss_type'], weighted_c_loss.item()), verbose=print_logs)
+            loss += weighted_c_loss
+            if self.save_loss_hist and self.save_individual_loss_histories:
+                loss_type_name = loss_func_dict['loss_type']
+                self.loss_history['weighted_' + loss_type_name].append(weighted_c_loss.detach().cpu().numpy())
+                self.loss_history['raw_' + loss_type_name].append(c_loss.detach().cpu().numpy())
         print_with_verbose('total: {}'.format(loss.item()), verbose=print_logs)
         # TODO: change here to save each loss value respectively
-        self.loss_history[self.current_iteration-1] = loss.cpu().detach().numpy()
+        if self.save_loss_hist:
+            self.loss_history['all'].append(loss.cpu().detach().numpy())
         loss.backward()
         del c_loss, loss
         gc.collect()
@@ -329,6 +350,10 @@ class ReconProcess:
             saving_name = self.filename_formatting('snapshot')
             if self.image_array is not None:
                 snapshot = self.image_array.copy()
+                if self.image_cropping is not None:
+                    image_cropping = self.image_cropping
+                    assert len(image_cropping) == 4
+                    snapshot = snapshot[image_cropping[0]:image_cropping[1], image_cropping[2]:image_cropping[3]]
                 if self.image_postprocess is not None:
                     snapshot = self.image_postprocess(snapshot)
                 if self.snapshot_postprocess is not None:
@@ -336,6 +361,8 @@ class ReconProcess:
                 if self.image_array_is_BGR:
                     print('BGR to RGB')
                     snapshot = snapshot[:,:,::-1]
+                image_array_saving_name = Path(saving_name + self.snapshot_image_pattern_tail).with_suffix('.mat')
+                savemat(str(image_array_saving_name), {'recon_image': snapshot})
                 snapshot = snapshot.clip(min=0, max=255)
 
                 image_saving_name = Path(saving_name + self.snapshot_image_pattern_tail).with_suffix(self.snapshot_ext)
@@ -349,6 +376,12 @@ class ReconProcess:
         # use (self.current_iteration - 1) for saving name
             saving_name = self.filename_formatting('final')
             image = self.image_array.copy()
+            if self.image_cropping is not None:
+                image_cropping = self.image_cropping
+                assert len(image_cropping) == 4
+                image = image[image_cropping[0]:image_cropping[1], image_cropping[2]:image_cropping[3]]
+            if self.save_raw_image_array:
+                raw_image = image.copy()
             if self.image_postprocess is not None:
                 image = self.image_postprocess(image)
             if self.image_array_is_BGR:
@@ -358,16 +391,40 @@ class ReconProcess:
             image.save(image_saving_name)
             print_with_verbose("saved the last image as {}".format(image_saving_name), verbose=print_logs)
             if self.save_loss_hist:
-                loss_history_saving_name = Path(saving_name + self.loss_history_pattern_tail).with_suffix(self.loss_history_ext)
-                figure = plt.figure()
-                plt.plot(self.loss_history)
-                plt.savefig(loss_history_saving_name)
-                del figure
-                print_with_verbose("saved loss history: {}".format(loss_history_saving_name), verbose=print_logs)
+                header = self.filename_formatting('snapshot')
+                for loss_type, loss_array in self.loss_history.items():
+                    loss_history_saving_name = Path(header + '_' + loss_type + self.loss_history_pattern_tail).with_suffix(self.loss_history_ext)
+                    figure = plt.figure()
+                    plt.plot(loss_array, label=loss_type)
+                    plt.legend()
+                    plt.savefig(loss_history_saving_name, bbox_inches='tight', dpi=300)
+                    del figure
+                    print_with_verbose("saved loss history: {}".format(loss_history_saving_name), verbose=print_logs)
+                if self.save_individual_loss_histories:
+                    loss_history_saving_name = Path(header + '_weighted_loss_all' + self.loss_history_pattern_tail).with_suffix(self.loss_history_ext)
+                    figure = plt.figure()
+                    for loss_type, loss_array in self.loss_history.items():
+                        if loss_type.startswith('raw_'): continue
+                        plt.plot(loss_array, label=loss_type)
+                    plt.legend()
+                    plt.savefig(loss_history_saving_name, bbox_inches='tight', dpi=300)
+                    del figure
+                    print_with_verbose("saved loss history: {}".format(loss_history_saving_name), verbose=print_logs)
+                # # FIXME: remove the following line
+                # np.save(header + 'raw_PixelRangeLoss_values', self.loss_history['raw_PixelRangeLoss'])
+
             if self.use_generator and self.save_feature:
                 feature_saving_name = saving_name + self.feature_saving_pattern_tail + '.mat'
                 savemat(feature_saving_name, {'final_generator_feature': self.feature_array})
                 print_with_verbose('saved the final feature: {}'.format(feature_saving_name))
+
+            if self.save_raw_image_array:
+                raw_image_saving_name = saving_name + '_raw_image.mat'
+                savemat(raw_image_saving_name, {'raw_final_image_array': raw_image})
+                print_with_verbose('saved the raw final image array: {}'.format(raw_image_saving_name))
+
+def load_initial_feature(initial_feature_file):
+    raise NotImplementedError('load initial feature from file is not implemented yet')
 
 def create_ReconProcess_from_conf(image_label, models_dict, loss_lists, subject='', roi_for_each_loss=[''], **recon_conf):
     general_settings = recon_conf['general_settings']
@@ -379,6 +436,23 @@ def create_ReconProcess_from_conf(image_label, models_dict, loss_lists, subject=
     if generator_settings['use_generator']:
         model_name = generator_settings['network_name']
         model_instance = models_dict[model_name]['model_instance']
+        if 'initial_feature_info' in optimization_settings:
+            try:
+                if optimization_settings['initial_feature_info'].endswith(('.mat', '.npy', '.txt')): # load files
+                    initial_feature = load_initial_feature(optimization_settings['initial_feature_info'])
+                else:
+                    initial_feature = model_instance.get_average_feature()
+            except:
+                print('failed loading initial features')
+                initial_feature = None
+        else:
+            initial_feature = None
+    # elif 'initial_image' in optimization_settings:
+    #     try:
+    #         if optimization_settings['intial_image'].endswith(('.png', '.jpg', '.JPEG', '.tiff', '.tif')): # load files
+    #             initial_image = load_initial_image(optimization_settings['initial_image'])
+    #         else:
+    #             initial_image = ...
 
     roi_names = ''
     for roi in roi_for_each_loss:
@@ -432,4 +506,4 @@ def create_ReconProcess_from_conf(image_label, models_dict, loss_lists, subject=
                         output_dir=output_dir, snapshot_dir=snapshot_dir,
                         generator_model=model_instance,
                         image_deprocess=generator_deprocess,
-                        image_mean=image_mean, image_label=image_label)
+                        image_mean=image_mean, image_label=image_label, initial_feature=initial_feature)

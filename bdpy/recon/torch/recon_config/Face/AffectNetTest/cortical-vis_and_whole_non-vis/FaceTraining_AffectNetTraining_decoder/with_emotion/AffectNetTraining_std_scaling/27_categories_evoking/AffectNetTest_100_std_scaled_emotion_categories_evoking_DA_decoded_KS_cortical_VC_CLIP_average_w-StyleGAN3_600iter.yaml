@@ -1,0 +1,236 @@
+general_settings:
+  device: 'cuda:0'
+  # label_upperbound: FaceTestImg0005
+  # label_lowerbound: FaceTestImg0020
+
+output_settings:
+  # output_root: /home/eitoikuta/reconstruction_revised/emotion/facial_image_reconstruction/iCNN/CLIP/reconstructed_images
+  output_root: /mnt/s5/home/eitoikuta/reconstruction_results/emotion/facial_image_reconstruction/iCNN/CLIP/reconstructed_images/AffectNetTest/FaceTraining_AffectNetTraining_decoder/AffectNetTraining_std_scaling
+  save_snapshot: True
+  save_loss_hist: True
+  save_individual_loss_histories: True
+  snapshot_ext: .tiff
+  retult_image_ext: .tiff
+  # snapshot_interval: 50
+  snapshot_interval: 100
+  info_display_interval: 1 # FIXME: currently not working
+  save_generator_feature: True
+  save_final_encoder_activations: True # FIXME: NYI
+  no_postproc_for_snapshot: True # FIXME: currently not working
+  image_postprocess: null
+  snapshot_postprocess: null
+  # image_cropping: [226, 797, 226, 797] # null or 4-sized array ([yt, yb, xl, xr])
+  image_cropping: [226, 897, 176, 847] # null or 4-sized array ([yt, yb, xl, xr])
+
+# ------------------------- #
+optimization_settings:
+  n_iter: 600
+  image_shape: [224, 224, 3] # image shape should be included in loss settings
+  initial_feature_info: average
+
+  generator:
+    use_generator: True
+    network_name: StyleGAN3
+    params_file: /home/eitoikuta/StyleGAN3_and_applications/inversion_and_editing/stylegan3-editing/pretrained_models/encoders/restyle_e4e_ffhq.pt
+    input_space: w
+    feature_shape: [512]
+    output_BGR: False # this information will be used for loss settings
+    deprocess:
+      output_range_255: True
+      mean: [128, 128, 128]
+      # mean: [0.5, 0.5, 0.5]
+      std: [128, 128, 128]
+      # std: [0.5, 0.5, 0.5]
+
+  normalize_gradients: True
+
+  # TODO: configurate the following parameters:
+  # - learning rate
+  # - L2 decay -> this leads to faster decrease of loss, but the quality also dropped drastically
+  optimizer_info:
+    optimizer_name: Adam
+    param_dicts:
+      - param_name: lr
+        # param_values: [1., 1e-10]
+        # param_values: [0.5, 1e-10]
+        # param_values: [1e-2, 1e-3]
+        param_values: [1e-2, 1e-2]
+      # - param_name: momentum
+      #   param_values: [0.9, 0.9]
+
+  inter_step_processes: null
+
+  # inter_step_processes:
+  #   - process_name: L2_decay
+  #     param_values: [0.2, 1e-10]
+  #   # - process_name: image_blurring
+  #   #   param_values: [2., .5]
+
+  #   # - process_name: feature_clipping
+  #   #   param_values:
+  #   #     - null # TODO: change programs to load the value from a file if path is specified
+  #   #     - /home/kiss/data/models_shared/caffe/bvlc_reference_caffenet/generators/ILSVRC2012_Training/relu7/act_range/3x/fc7.txt
+
+  stabilizing_processes:
+    - process_name: jittering
+      jitter_size: 4
+
+# ------------------------- #
+loss_settings:
+  - loss_type: ImageEncoderActivationLoss
+    encoder_info:
+      network_name: CLIP_ViT-B_32
+      model_inputs_are_RGB: True
+      preprocess_from_PIL: False # TODO: where should this arg be placed?
+      image_encoder_only: True
+      input_image_shape: [224, 224]
+      preprocess_info:
+        preprocess_input_range_255: True
+        mean: null
+        std: null
+    image_augmentation:
+      perform_augmentation: False
+      # n_cutouts: 10
+      # image_aug_dicts:
+      #   - type: ColorJitter
+      #     # params:
+      #     #   brightness: [0, 0.5]
+      #   - type: RandomAffine
+      #   - type: RandomResizedCrop
+      #   - type: RandomErasing
+    # image_cropping: [226, 797, 226, 797] # null or 4-sized array ([yt, yb, xl, xr]). FIXME: dependent on the output size of the generator
+    image_cropping: [226, 897, 176, 847] # null or 4-sized array ([yt, yb, xl, xr]). FIXME: dependent on the output size of the generator
+    num_layers_to_use: 27
+    # num_layers_to_use: [27] # FIXME: list will not be accepted
+    ref_feature_info:
+      input_type: image
+      decoded: True # for enabling to use true features easily
+      features_dir: /home/eitoikuta/reconstruction_revised/emotion/facial_image_reconstruction/iCNN/CLIP/decoded_features/AffectNetTest/whole_brain_and_cortical_vis_FaceTraining_AffectNet_CLIP_fmriprep_500voxel_allunits_fastl2lir_alpha100/decoded_features
+      subjects: [KS]
+      rois: [whole_VC]
+      normalize_feature: True
+      channel_axis_list: [1,
+                          2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                          2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+                          1, 1]
+
+      sample_axis_info: [0,
+                         [1], 1, [1], 1, [1], 1, [1], 1,
+                         [1], 1, [1], 1, [1], 1, [1], 1,
+                         [1], 1, [1], 1, [1], 1, [1], 1,
+                         0, 0]
+      include_model_output: True
+      normalization_settings:
+        subtrahend:
+          values: '/home/eitoikuta/reconstruction_revised/CLIP/encoder_features_std/CLIP_ViT-B_32/AffectNetTraining/unit-wise_mean_and_std/AffectNetTraining_unit-wise_mean.mat'
+          calculation_type: 'unit-wise'
+        divisor:
+          values: 'std'
+          # calculation_type: 'positional'
+          calculation_type: 'channel-wise'
+          std_ddof: 1
+        multiplier:
+          values: '/home/eitoikuta/reconstruction_revised/CLIP/encoder_features_std/CLIP_ViT-B_32/AffectNetTraining/unit-wise_mean_and_std/AffectNetTraining_unit-wise_std-ddof1.mat'
+          calculation_type: 'channel-wise'
+          std_ddof: 1
+        addend:
+          values: '/home/eitoikuta/reconstruction_revised/CLIP/encoder_features_std/CLIP_ViT-B_32/AffectNetTraining/unit-wise_mean_and_std/AffectNetTraining_unit-wise_mean.mat'
+          calculation_type: 'unit-wise'
+      dirs_pattern: ['layer']
+
+    uniform_layer_weight: False
+    loss_dicts:
+      - loss_name: MSE
+        weight: 1
+        params:
+          reduction: sum
+      # - loss_name: MSEwithReguralization
+      #   weight: 2
+      #   params:
+      #     vid: 1
+      #     l_lambda: 0.01
+      # - loss_name: Corr
+      #   weight: 0.2
+      # - loss_name: FeatCorrLoss
+      #   weight: 0.6
+    weight: 1
+
+  # TODO: implement image_cropping and feature normalization
+  # TODO: data augmentation especially ColorJitter will worsen the results
+  - loss_type: CLIPLoss
+    encoder_info:
+      network_name: CLIP_ViT-B_32
+      text_input_shape: [77, 1, 512]
+    image_cropping: [226, 897, 176, 847] # null or 4-sized array ([yt, yb, xl, xr]). FIXME: dependent on the output size of the generator
+    image_augmentation:
+      perform_augmentation: True
+      n_cutouts: 10
+      image_aug_dicts:
+        - type: ColorJitter
+          # params:
+          #   brightness: [0, 0.5]
+        - type: RandomAffine
+        - type: RandomResizedCrop
+        - type: RandomErasing
+    ref_feature_info:
+      input_type: text
+      features_dir: /home/eitoikuta/reconstruction_revised/emotion/CLIP_and_raw_emotion_feature_decoding/decoded_features/FaceTest/cortical_vis_and_non-vis_27emotion_fmriprep_rep1_500voxel_allunits_fastl2lir_alpha100/decoded_features/CLIP/27_categories_evoking
+      # text_feature_dir_root: /home/eitoikuta/reconstruction_revised/emotion/decoded_emotion_features
+      # selection_type: ''
+      # caption_type_name: ''
+      # text_decoding_config_name: TH_CLIP_27-categories_fmriprep_whole-VC_500_alpha-100
+      text_features_module_saving_names:
+        - output_layer
+      text_features_hooked_module_names:
+        - output_layer
+      text_features_yaml_file: /home/eitoikuta/reconstruction_revised/CLIP/recon_config/recon_with_text_config/emotion/null.yaml
+      decoded: True
+      subjects: [KS]
+      rois: [whole_non_visual]
+      normalization_settings:
+        subtrahend:
+          values: '/home/eitoikuta/reconstruction_revised/emotion/CLIP_and_raw_emotion_feature_decoding/feature_stds/CLIP_ViT-B_32/EvocativeMovies/27_categories_evoking/unit-wise_mean_and_std/true/EvocativeMovies_true_unit-wise_mean.mat'
+          calculation_type: 'unit-wise'
+        divisor:
+          values: 'std'
+          calculation_type: 'layer-wise'
+          std_ddof: 1
+        multiplier:
+          values: '/home/eitoikuta/reconstruction_revised/emotion/CLIP_and_raw_emotion_feature_decoding/feature_stds/CLIP_ViT-B_32/EvocativeMovies/27_categories_evoking/unit-wise_mean_and_std/true/EvocativeMovies_true_unit-wise_std-ddof1.mat'
+          calculation_type: 'unit-wise'
+          std_ddof: 1
+        addend:
+          values: '/home/eitoikuta/reconstruction_revised/emotion/CLIP_and_raw_emotion_feature_decoding/feature_stds/CLIP_ViT-B_32/EvocativeMovies/27_categories_evoking/unit-wise_mean_and_std/true/EvocativeMovies_true_unit-wise_mean.mat'
+          calculation_type: 'unit-wise'
+    weight: 100
+
+# normalization_settings:
+#         {subtracthend: {'values': <ndarray>, 'calculation_type': 'unit-wise'},
+#          divisor: {'values': <ndarray>, 'calculation_type': 'all_units_to_one', 'std_ddof': 1},
+#          multiplier: {'values': <ndarray>, 'calculation_type': 'positional', 'std_ddof': 0},
+#          addend: {'values': <ndarray>, 'calculation_type': 'unit-wise'}}
+
+#         - If values is str (choices are ['std', 'mean']), values calculated from original given features will be used
+#         {subtracthend: {'values': 'mean', 'calculation_type': 'unit-wise'},
+#          divisor: {'values': <ndarray>, 'calculation_type': 'all_units_to_one', 'std_ddof': 1},
+#          multiplier: {'values': 'std', 'calculation_type': 'positional', 'std_ddof': 1},
+#          addend: {'values': <ndarray>, 'calculation_type': 'unit-wise'}}
+
+#         - None is acceptable for all elements
+#         {subtracthend: None,
+#          divisor: {'values': <ndarray>, 'calculation_type': 'all_units_to_one', 'std_ddof': 1},
+#          multiplier: None,
+#          addend: {'values': <ndarray>, 'calculation_type': 'unit-wise'}}
+
+#         - If 'target_layers' in the sub-dict, they will applied to only layers in the list.
+#         {subtracthend: {'values': <ndarray>, 'calculation_type': 'unit-wise', 'target_layers': <list of layers>},
+#          divisor: {'values': <ndarray>, 'calculation_type': 'all_units_to_one', 'std_ddof': 1},
+#          multiplier: {'values': <ndarray>, 'calculation_type': 'positional', 'std_ddof': 0},
+#          addend: {'values': <ndarray>, 'calculation_type': 'unit-wise'}}
+
+#         - If you want to use different values for some layers, use following:
+#         {subtracthend: [{'values': <ndarray>, 'target_layers': <list of layers>, 'calculation_type': 'unit-wise'},
+#                         {'values': <ndarray>, 'target_layers': <list of layers>, 'calculation_type': 'positional'}],
+#          divisor: None
+#          multiplier: None
+#          addend: None}
